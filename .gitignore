@@ -1,0 +1,17 @@
+# Python
+**/__pycache__/
+**/*.pyc
+**/.venv/
+
+# Flutter
+**/.dart_tool/
+**/build/
+**/.flutter-plugins-dependencies
+**/ios/Flutter/ephemeral/
+**/macos/Flutter/ephemeral/
+**/windows/flutter/ephemeral/
+**/linux/flutter/ephemeral/
+
+# Local data/models if needed
+myscribe_backend/dataset/images/
+myscribe_backend/trocr-handwritten-cyrillic/
