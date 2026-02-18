@@ -1,17 +1,29 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
 import 'package:myscribe_app/config/api_config.dart';
 import 'package:myscribe_app/models/correction.dart';
 import 'package:myscribe_app/models/document.dart';
 import 'package:myscribe_app/services/database_service.dart';
+import 'package:myscribe_app/services/ocr_service.dart';
 import 'package:myscribe_app/ui/widgets/selection_painter.dart';
 import 'package:myscribe_app/utils/image_utils.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:uuid/uuid.dart';
+
+enum CorrectionSyncState {
+  idle,
+  savingLocal,
+  savedLocal,
+  sending,
+  sent,
+  sendFailed,
+}
 
 class DocumentDetailScreen extends StatefulWidget {
   final Document document;
@@ -30,6 +42,11 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
   bool _isEditing = false;
   bool _isDrawingMode = false;
   bool _isSavingCorrection = false;
+  bool _isRerunningOcr = false;
+
+  CorrectionSyncState _syncState = CorrectionSyncState.idle;
+  String? _syncStatusMessage;
+  _PendingCorrectionUpload? _pendingCorrectionUpload;
 
   Size? _imageSize;
   bool _isImageLoaded = false;
@@ -56,6 +73,8 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
     _transformationController.dispose();
     super.dispose();
   }
+
+  bool get _isBusy => _isSavingCorrection || _isRerunningOcr;
 
   Future<void> _calculateImageDimensions() async {
     try {
@@ -93,7 +112,7 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
         _imageLoadError = 'Ошибка загрузки изображения.';
         _isImageLoaded = false;
       });
-      print('Ошибка загрузки изображения: $e');
+      debugPrint('Ошибка загрузки изображения: $e');
     }
   }
 
@@ -109,6 +128,24 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(const SnackBar(content: Text('Текст сохранен')));
+  }
+
+  Future<void> _setRequiresReview(
+    bool value, {
+    bool showSnackBar = true,
+  }) async {
+    final dbService = Provider.of<DatabaseService>(context, listen: false);
+    await dbService.updateDocumentRequiresReview(widget.document.id, value);
+    if (!mounted) return;
+    setState(() {
+      widget.document.requiresReview = value;
+    });
+    if (showSnackBar) {
+      final text = value
+          ? 'Документ помечен: требует проверки'
+          : 'Документ помечен как проверенный';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    }
   }
 
   Size? _getViewportSize() {
@@ -162,16 +199,14 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
   }
 
   void _onPanStart(DragStartDetails details) {
-    if (!_isDrawingMode || _isSavingCorrection) return;
+    if (!_isDrawingMode || _isBusy) return;
     final scenePoint = _transformationController.toScene(details.localPosition);
     _selectionStartScene = scenePoint;
     _setSelectionFromSceneRect(Rect.fromPoints(scenePoint, scenePoint));
   }
 
   void _onPanUpdate(DragUpdateDetails details) {
-    if (!_isDrawingMode ||
-        _isSavingCorrection ||
-        _selectionStartScene == null) {
+    if (!_isDrawingMode || _isBusy || _selectionStartScene == null) {
       return;
     }
 
@@ -189,8 +224,8 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
     });
   }
 
-  void _onPanEnd(DragEndDetails details) {
-    if (!_isDrawingMode || _isSavingCorrection) return;
+  Future<void> _onPanEnd(DragEndDetails details) async {
+    if (!_isDrawingMode || _isBusy) return;
 
     final selectionSceneRect = _selectionSceneRect;
     final imageSize = _imageSize;
@@ -220,47 +255,104 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
       return;
     }
 
-    _showCorrectionDialog(cropImageRect: cropImageRect);
-  }
-
-  Future<void> _showCorrectionDialog({required Rect cropImageRect}) async {
-    final correctedTextController = TextEditingController();
-
-    final correctedText = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Исправление'),
-        content: TextField(
-          controller: correctedTextController,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: 'Правильный текст'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Отмена'),
-          ),
-          ElevatedButton(
-            onPressed: () =>
-                Navigator.pop(context, correctedTextController.text),
-            child: const Text('Сохранить'),
-          ),
-        ],
-      ),
-    );
-
-    if (!mounted) return;
-    if (correctedText == null || correctedText.isEmpty) return;
+    final draft = await _showCorrectionSheet();
+    if (!mounted || draft == null || draft.correctedText.isEmpty) {
+      return;
+    }
 
     await _saveCorrection(
       cropImageRect: cropImageRect,
-      correctedText: correctedText,
+      correctedText: draft.correctedText,
+      sendToServer: draft.sendToServer,
     );
+  }
+
+  Future<_CorrectionDraft?> _showCorrectionSheet() async {
+    final correctedTextController = TextEditingController();
+    var sendToServer = true;
+
+    final result = await showModalBottomSheet<_CorrectionDraft>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Padding(
+              padding: EdgeInsets.fromLTRB(
+                16,
+                16,
+                16,
+                16 + MediaQuery.of(context).viewInsets.bottom,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Добавить коррекцию',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: correctedTextController,
+                    autofocus: true,
+                    minLines: 1,
+                    maxLines: 4,
+                    decoration: const InputDecoration(
+                      hintText: 'Введите правильный текст',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: sendToServer,
+                    title: const Text('Отправить на сервер сразу'),
+                    onChanged: (value) {
+                      setModalState(() {
+                        sendToServer = value;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Отмена'),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton(
+                        onPressed: () {
+                          Navigator.pop(
+                            context,
+                            _CorrectionDraft(
+                              correctedText: correctedTextController.text.trim(),
+                              sendToServer: sendToServer,
+                            ),
+                          );
+                        },
+                        child: const Text('Сохранить'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    correctedTextController.dispose();
+    return result;
   }
 
   Future<void> _saveCorrection({
     required Rect cropImageRect,
     required String correctedText,
+    required bool sendToServer,
   }) async {
     if (_isSavingCorrection || _imageSize == null || _imageLoadError != null) {
       return;
@@ -271,6 +363,10 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
     setState(() {
       _isSavingCorrection = true;
     });
+    _setSyncStatus(
+      CorrectionSyncState.savingLocal,
+      'Сохраняем локально...',
+    );
 
     try {
       final sourceFile = File(widget.document.imagePath);
@@ -315,23 +411,50 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
         ),
       );
 
-      final uri = ApiConfig.feedbackUri;
-      final request = http.MultipartRequest('POST', uri);
-      request.fields['correct_text'] = correctedText;
-      request.files.add(
-        await http.MultipartFile.fromPath('file', fragmentPath),
-      );
-      await request.send();
+      await _setRequiresReview(true, showSnackBar: false);
+      _setSyncStatus(CorrectionSyncState.savedLocal, 'Сохранено локально');
+
+      if (sendToServer) {
+        try {
+          await _sendCorrectionToServer(
+            fragmentPath: fragmentPath,
+            correctedText: correctedText,
+          );
+        } catch (e) {
+          if (!mounted) return;
+          setState(() {
+            _pendingCorrectionUpload = _PendingCorrectionUpload(
+              fragmentPath: fragmentPath,
+              correctedText: correctedText,
+            );
+          });
+          _setSyncStatus(
+            CorrectionSyncState.sendFailed,
+            'Сохранено локально, отправка не удалась',
+          );
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Ошибка отправки: ${_toUserError(e)}'),
+              action: SnackBarAction(
+                label: 'Retry',
+                onPressed: _retryPendingUpload,
+              ),
+            ),
+          );
+          return;
+        }
+      }
 
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Отправлено!')));
+      ).showSnackBar(const SnackBar(content: Text('Коррекция сохранена')));
     } catch (e) {
       if (!mounted) return;
+      _setSyncStatus(CorrectionSyncState.sendFailed, 'Ошибка сохранения');
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Ошибка: $e')));
+      ).showSnackBar(SnackBar(content: Text('Ошибка: ${_toUserError(e)}')));
     } finally {
       if (mounted) {
         setState(() {
@@ -339,6 +462,130 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
         });
       }
     }
+  }
+
+  Future<void> _sendCorrectionToServer({
+    required String fragmentPath,
+    required String correctedText,
+  }) async {
+    _setSyncStatus(CorrectionSyncState.sending, 'Отправка на сервер...');
+    final uri = ApiConfig.feedbackUri;
+    final request = http.MultipartRequest('POST', uri);
+    request.fields['correct_text'] = correctedText;
+    request.files.add(await http.MultipartFile.fromPath('file', fragmentPath));
+    final response = await request.send();
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      if (!mounted) return;
+      setState(() {
+        _pendingCorrectionUpload = null;
+      });
+      _setSyncStatus(CorrectionSyncState.sent, 'Отправлено на сервер');
+      return;
+    }
+
+    throw Exception('Сервер вернул ${response.statusCode}');
+  }
+
+  Future<void> _retryPendingUpload() async {
+    final pending = _pendingCorrectionUpload;
+    if (pending == null || _isBusy) {
+      return;
+    }
+
+    try {
+      await _sendCorrectionToServer(
+        fragmentPath: pending.fragmentPath,
+        correctedText: pending.correctedText,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Повторная отправка успешна')));
+    } catch (e) {
+      if (!mounted) return;
+      _setSyncStatus(
+        CorrectionSyncState.sendFailed,
+        'Отправка снова не удалась',
+      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Ошибка: ${_toUserError(e)}')));
+    }
+  }
+
+  Future<void> _copyText() async {
+    await Clipboard.setData(ClipboardData(text: _textController.text));
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Текст скопирован')));
+  }
+
+  Future<void> _shareText() async {
+    await SharePlus.instance.share(ShareParams(text: _textController.text));
+  }
+
+  Future<void> _rerunOcr() async {
+    if (_isRerunningOcr || _isSavingCorrection) {
+      return;
+    }
+
+    final ocrService = Provider.of<OcrService>(context, listen: false);
+    final dbService = Provider.of<DatabaseService>(context, listen: false);
+
+    try {
+      setState(() {
+        _isRerunningOcr = true;
+      });
+
+      final sourceFile = File(widget.document.imagePath);
+      if (!await sourceFile.exists()) {
+        throw Exception('Файл изображения недоступен');
+      }
+
+      final imageBytes = await sourceFile.readAsBytes();
+
+      _setSyncStatus(CorrectionSyncState.sending, 'Повторное OCR...');
+      final recognizedText = await ocrService.runOCR(imageBytes);
+
+      _textController.text = recognizedText;
+      widget.document.recognizedText = recognizedText;
+      await dbService.updateDocumentText(widget.document.id, recognizedText);
+
+      _setSyncStatus(CorrectionSyncState.sent, 'Текст обновлен');
+      if (widget.document.requiresReview) {
+        await _setRequiresReview(false, showSnackBar: false);
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('OCR выполнен повторно')));
+    } catch (e) {
+      if (!mounted) return;
+      _setSyncStatus(CorrectionSyncState.sendFailed, 'Ошибка повторного OCR');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Ошибка: ${_toUserError(e)}'),
+          action: SnackBarAction(label: 'Retry', onPressed: _rerunOcr),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRerunningOcr = false;
+        });
+      }
+    }
+  }
+
+  void _setSyncStatus(CorrectionSyncState state, String? message) {
+    if (!mounted) return;
+    setState(() {
+      _syncState = state;
+      _syncStatusMessage = message;
+    });
   }
 
   Future<void> _deleteCurrentDocument() async {
@@ -378,8 +625,8 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
                 transformationController: _transformationController,
                 minScale: 1.0,
                 maxScale: 5.0,
-                panEnabled: !_isDrawingMode && !_isSavingCorrection,
-                scaleEnabled: !_isDrawingMode && !_isSavingCorrection,
+                panEnabled: !_isDrawingMode && !_isBusy,
+                scaleEnabled: !_isDrawingMode && !_isBusy,
                 child: SizedBox(
                   width: viewportSize.width,
                   height: viewportSize.height,
@@ -404,7 +651,7 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
             ),
             Positioned.fill(
               child: IgnorePointer(
-                ignoring: !_isDrawingMode || _isSavingCorrection,
+                ignoring: !_isDrawingMode || _isBusy,
                 child: GestureDetector(
                   key: _viewportKey,
                   behavior: HitTestBehavior.opaque,
@@ -417,7 +664,7 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
                 ),
               ),
             ),
-            if (_isSavingCorrection)
+            if (_isBusy)
               const Positioned.fill(
                 child: ColoredBox(
                   color: Color(0x66000000),
@@ -427,6 +674,96 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
           ],
         );
       },
+    );
+  }
+
+  Color _syncColor(CorrectionSyncState state) {
+    return switch (state) {
+      CorrectionSyncState.idle => Colors.blueGrey,
+      CorrectionSyncState.savingLocal => Colors.orange,
+      CorrectionSyncState.savedLocal => Colors.blue,
+      CorrectionSyncState.sending => Colors.teal,
+      CorrectionSyncState.sent => Colors.green,
+      CorrectionSyncState.sendFailed => Colors.redAccent,
+    };
+  }
+
+  IconData _syncIcon(CorrectionSyncState state) {
+    return switch (state) {
+      CorrectionSyncState.idle => Icons.info_outline,
+      CorrectionSyncState.savingLocal => Icons.save_outlined,
+      CorrectionSyncState.savedLocal => Icons.check_circle_outline,
+      CorrectionSyncState.sending => Icons.cloud_upload_outlined,
+      CorrectionSyncState.sent => Icons.cloud_done_outlined,
+      CorrectionSyncState.sendFailed => Icons.error_outline,
+    };
+  }
+
+  String _toUserError(Object error) {
+    final message = error.toString();
+    return message.startsWith('Exception: ')
+        ? message.substring('Exception: '.length)
+        : message;
+  }
+
+  Widget _buildSyncStatusBanner() {
+    final message = _syncStatusMessage;
+    if (message == null || _syncState == CorrectionSyncState.idle) {
+      return const SizedBox.shrink();
+    }
+
+    final color = _syncColor(_syncState);
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.6)),
+      ),
+      child: Row(
+        children: [
+          Icon(_syncIcon(_syncState), color: color),
+          const SizedBox(width: 8),
+          Expanded(child: Text(message)),
+          if (_syncState == CorrectionSyncState.sendFailed &&
+              _pendingCorrectionUpload != null)
+            TextButton(onPressed: _retryPendingUpload, child: const Text('Retry')),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQuickActions() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          ActionChip(
+            avatar: const Icon(Icons.copy, size: 18),
+            label: const Text('Copy'),
+            onPressed: _copyText,
+          ),
+          ActionChip(
+            avatar: const Icon(Icons.share, size: 18),
+            label: const Text('Share'),
+            onPressed: _shareText,
+          ),
+          ActionChip(
+            avatar: const Icon(Icons.refresh, size: 18),
+            label: const Text('Re-run OCR'),
+            onPressed: _isBusy ? null : _rerunOcr,
+          ),
+          FilterChip(
+            label: const Text('Требует проверки'),
+            selected: widget.document.requiresReview,
+            onSelected: (value) => _setRequiresReview(value),
+          ),
+        ],
+      ),
     );
   }
 
@@ -457,6 +794,8 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
                   : _buildImageWorkspace(),
             ),
           ),
+          _buildQuickActions(),
+          _buildSyncStatusBanner(),
           Expanded(
             flex: 2,
             child: TextField(
@@ -474,8 +813,7 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed:
-            (_isImageLoaded && _imageLoadError == null && !_isSavingCorrection)
+        onPressed: (_isImageLoaded && _imageLoadError == null && !_isBusy)
             ? () {
                 setState(() {
                   _isDrawingMode = !_isDrawingMode;
@@ -520,4 +858,24 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
       ),
     );
   }
+}
+
+class _CorrectionDraft {
+  final String correctedText;
+  final bool sendToServer;
+
+  const _CorrectionDraft({
+    required this.correctedText,
+    required this.sendToServer,
+  });
+}
+
+class _PendingCorrectionUpload {
+  final String fragmentPath;
+  final String correctedText;
+
+  const _PendingCorrectionUpload({
+    required this.fragmentPath,
+    required this.correctedText,
+  });
 }

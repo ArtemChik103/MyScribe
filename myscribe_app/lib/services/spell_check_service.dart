@@ -1,5 +1,6 @@
 // Файл: lib/services/spell_check_service.dart
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:myscribe_app/utils/constants.dart';
 
@@ -15,9 +16,12 @@ class SpellCheckService {
       final enContent = await _loadAndCleanAsset(AppConstants.enDictionaryPath);
       _englishWords.addAll(enContent.split('\n').map((e) => e.trim().toLowerCase()));
 
-      print("Словари загружены: ${_russianWords.length} русских слов, ${_englishWords.length} английских слов.");
+      debugPrint(
+        'Словари загружены: ${_russianWords.length} русских, '
+        '${_englishWords.length} английских.',
+      );
     } catch (e) {
-      print("Ошибка при финальной загрузке словарей: $e");
+      debugPrint('Ошибка загрузки словарей: $e');
     }
   }
 

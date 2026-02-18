@@ -9,7 +9,7 @@ class SelectionPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (rect != null) {
       final paint = Paint()
-        ..color = Colors.blue.withOpacity(0.4)
+        ..color = Colors.blue.withValues(alpha: 0.4)
         ..style = PaintingStyle.fill;
 
       final borderPaint = Paint()

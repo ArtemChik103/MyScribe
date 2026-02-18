@@ -1,24 +1,21 @@
 import 'dart:convert';
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:myscribe_app/config/api_config.dart';
 
-class OcrService {
-  /// Метод оставлен для совместимости, но теперь он ничего не делает,
-  /// так как модель грузится на сервере.
-  Future<void> loadModel({String? customModelPath}) async {
-    print(
-      "Используется удаленный сервер. Загрузка модели на клиенте не требуется.",
-    );
-  }
+enum OcrProcessingStage { sending, processing, parsing }
 
-  Future<String> runOCR(Uint8List imageBytes) async {
+class OcrService {
+  Future<String> runOCR(
+    Uint8List imageBytes, {
+    void Function(OcrProcessingStage stage)? onStage,
+  }) async {
     try {
       final uri = ApiConfig.ocrUri;
-      print("Отправка изображения на сервер: $uri");
+      debugPrint('OCR request -> $uri');
 
       // Создаем Multipart запрос
-      var request = http.MultipartRequest('POST', uri);
+      final request = http.MultipartRequest('POST', uri);
 
       // Добавляем файл
       request.files.add(
@@ -30,28 +27,40 @@ class OcrService {
       );
 
       // Отправляем
-      var streamedResponse = await request.send();
-      var response = await http.Response.fromStream(streamedResponse);
+      onStage?.call(OcrProcessingStage.sending);
+      final streamedResponse = await request.send();
+      onStage?.call(OcrProcessingStage.processing);
+      final response = await http.Response.fromStream(streamedResponse);
 
       if (response.statusCode == 200) {
-        // Успех, парсим JSON
-        // Ожидаемый ответ от сервера: {"text": "Распознанный текст"}
+        onStage?.call(OcrProcessingStage.parsing);
         final Map<String, dynamic> data = jsonDecode(
           utf8.decode(response.bodyBytes),
         );
         final String text = data['text'] ?? "";
-        print("Ответ сервера: $text");
+        debugPrint('OCR success, text length: ${text.length}');
         return text;
-      } else {
-        print("Ошибка сервера: ${response.statusCode} ${response.body}");
-        return "Ошибка сервера: ${response.statusCode}";
       }
+
+      final responseBody = utf8.decode(response.bodyBytes);
+      debugPrint('OCR error ${response.statusCode}: $responseBody');
+      throw Exception(
+        'Сервер вернул ${response.statusCode}. '
+        'Проверьте доступность OCR API.',
+      );
     } on http.ClientException catch (e) {
-      print("Ошибка соединения (ClientException): $e");
-      return "Ошибка соединения с сервером (${ApiConfig.baseUrl}). Для отладки на ПК используйте http://127.0.0.1:8000, для телефона через Tailscale передайте --dart-define=API_BASE_URL=http://<tailscale-ip>:8000.";
+      debugPrint('OCR client exception: $e');
+      throw Exception(
+        'Ошибка соединения с сервером (${ApiConfig.baseUrl}). '
+        'Для ПК: http://127.0.0.1:8000. '
+        'Для телефона можно передать --dart-define=API_BASE_URL=http://<ip>:8000.',
+      );
     } catch (e) {
-      print("Ошибка соединения: $e");
-      return "Ошибка соединения с сервером (${ApiConfig.baseUrl}). Проверьте, что backend запущен и доступен.";
+      debugPrint('OCR unexpected error: $e');
+      throw Exception(
+        'Ошибка OCR (${ApiConfig.baseUrl}). '
+        'Проверьте, что backend запущен и доступен.',
+      );
     }
   }
 

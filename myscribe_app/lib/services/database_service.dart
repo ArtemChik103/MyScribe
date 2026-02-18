@@ -21,6 +21,7 @@ class DatabaseService {
       path,
       version: AppConstants.databaseVersion,
       onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
     ); // <-- ИСПОЛЬЗОВАНИЕ
   }
 
@@ -30,7 +31,8 @@ class DatabaseService {
         id TEXT PRIMARY KEY,
         imagePath TEXT NOT NULL,
         recognizedText TEXT NOT NULL,
-        createdAt TEXT NOT NULL
+        createdAt TEXT NOT NULL,
+        requiresReview INTEGER NOT NULL DEFAULT 0
       )
     '''); // <-- ИСПОЛЬЗОВАНИЕ
     await db.execute('''
@@ -42,6 +44,15 @@ class DatabaseService {
         FOREIGN KEY (documentId) REFERENCES ${AppConstants.tableDocuments} (id) ON DELETE CASCADE
       )
     '''); // <-- ИСПОЛЬЗОВАНИЕ
+  }
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute(
+        'ALTER TABLE ${AppConstants.tableDocuments} '
+        'ADD COLUMN requiresReview INTEGER NOT NULL DEFAULT 0',
+      );
+    }
   }
 
   // CRUD для Документов
@@ -68,6 +79,16 @@ class DatabaseService {
     await db.update(
       AppConstants.tableDocuments, // <-- ИСПОЛЬЗОВАНИЕ
       {'recognizedText': newText},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<void> updateDocumentRequiresReview(String id, bool requiresReview) async {
+    final db = await database;
+    await db.update(
+      AppConstants.tableDocuments,
+      {'requiresReview': requiresReview ? 1 : 0},
       where: 'id = ?',
       whereArgs: [id],
     );
