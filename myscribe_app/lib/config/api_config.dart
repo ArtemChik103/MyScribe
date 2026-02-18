@@ -19,7 +19,7 @@ class ApiConfig {
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
         // Android emulator cannot reach host machine via 127.0.0.1.
-        return 'http://10.0.2.2:8000';
+        return 'http://100.95.221.105:8000';
       case TargetPlatform.iOS:
       case TargetPlatform.macOS:
       case TargetPlatform.windows:
