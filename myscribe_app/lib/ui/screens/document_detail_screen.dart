@@ -2,9 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
-import 'package:myscribe_app/config/api_config.dart';
 import 'package:myscribe_app/models/correction.dart';
 import 'package:myscribe_app/models/document.dart';
 import 'package:myscribe_app/services/database_service.dart';
@@ -260,6 +258,9 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
       return;
     }
 
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+
     await _saveCorrection(
       cropImageRect: cropImageRect,
       correctedText: draft.correctedText,
@@ -268,85 +269,11 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
   }
 
   Future<_CorrectionDraft?> _showCorrectionSheet() async {
-    final correctedTextController = TextEditingController();
-    var sendToServer = true;
-
-    final result = await showModalBottomSheet<_CorrectionDraft>(
+    return showModalBottomSheet<_CorrectionDraft>(
       context: context,
       isScrollControlled: true,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            return Padding(
-              padding: EdgeInsets.fromLTRB(
-                16,
-                16,
-                16,
-                16 + MediaQuery.of(context).viewInsets.bottom,
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Добавить коррекцию',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: correctedTextController,
-                    autofocus: true,
-                    minLines: 1,
-                    maxLines: 4,
-                    decoration: const InputDecoration(
-                      hintText: 'Введите правильный текст',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    value: sendToServer,
-                    title: const Text('Отправить на сервер сразу'),
-                    onChanged: (value) {
-                      setModalState(() {
-                        sendToServer = value;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Отмена'),
-                      ),
-                      const SizedBox(width: 8),
-                      ElevatedButton(
-                        onPressed: () {
-                          Navigator.pop(
-                            context,
-                            _CorrectionDraft(
-                              correctedText: correctedTextController.text.trim(),
-                              sendToServer: sendToServer,
-                            ),
-                          );
-                        },
-                        child: const Text('Сохранить'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
+      builder: (context) => const _CorrectionSheet(),
     );
-
-    correctedTextController.dispose();
-    return result;
   }
 
   Future<void> _saveCorrection({
@@ -469,22 +396,16 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
     required String correctedText,
   }) async {
     _setSyncStatus(CorrectionSyncState.sending, 'Отправка на сервер...');
-    final uri = ApiConfig.feedbackUri;
-    final request = http.MultipartRequest('POST', uri);
-    request.fields['correct_text'] = correctedText;
-    request.files.add(await http.MultipartFile.fromPath('file', fragmentPath));
-    final response = await request.send();
-
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      if (!mounted) return;
-      setState(() {
-        _pendingCorrectionUpload = null;
-      });
-      _setSyncStatus(CorrectionSyncState.sent, 'Отправлено на сервер');
-      return;
-    }
-
-    throw Exception('Сервер вернул ${response.statusCode}');
+    final ocrService = Provider.of<OcrService>(context, listen: false);
+    await ocrService.sendFeedback(
+      fragmentPath: fragmentPath,
+      correctedText: correctedText,
+    );
+    if (!mounted) return;
+    setState(() {
+      _pendingCorrectionUpload = null;
+    });
+    _setSyncStatus(CorrectionSyncState.sent, 'Отправлено на сервер');
   }
 
   Future<void> _retryPendingUpload() async {
@@ -868,6 +789,95 @@ class _CorrectionDraft {
     required this.correctedText,
     required this.sendToServer,
   });
+}
+
+class _CorrectionSheet extends StatefulWidget {
+  const _CorrectionSheet();
+
+  @override
+  State<_CorrectionSheet> createState() => _CorrectionSheetState();
+}
+
+class _CorrectionSheetState extends State<_CorrectionSheet> {
+  final TextEditingController _correctedTextController =
+      TextEditingController();
+  bool _sendToServer = true;
+
+  @override
+  void dispose() {
+    _correctedTextController.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    Navigator.of(context).pop(
+      _CorrectionDraft(
+        correctedText: _correctedTextController.text.trim(),
+        sendToServer: _sendToServer,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        16,
+        16,
+        16,
+        16 + MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Добавить коррекцию',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _correctedTextController,
+            autofocus: true,
+            minLines: 1,
+            maxLines: 4,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => _submit(),
+            decoration: const InputDecoration(
+              hintText: 'Введите правильный текст',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 8),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _sendToServer,
+            title: const Text('Отправить на сервер сразу'),
+            onChanged: (value) {
+              setState(() {
+                _sendToServer = value;
+              });
+            },
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Отмена'),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton(
+                onPressed: _submit,
+                child: const Text('Сохранить'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _PendingCorrectionUpload {

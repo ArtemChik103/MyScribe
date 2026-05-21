@@ -24,10 +24,11 @@ app.add_middleware(
 # ============================================
 
 # === НАСТРОЙКИ ===
-LOCAL_MODEL_PATH = r"C:\Users\pvppv\Desktop\roo\myscribe_backend\trocr-handwritten-cyrillic"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LOCAL_MODEL_PATH = os.path.join(BASE_DIR, "trocr-handwritten-cyrillic")
 
 # ДЛЯ FEEDBACK (СБОР ДАННЫХ)
-DATASET_DIR = "dataset"
+DATASET_DIR = os.path.join(BASE_DIR, "dataset")
 IMAGES_DIR = os.path.join(DATASET_DIR, "images")
 os.makedirs(IMAGES_DIR, exist_ok=True)
 LABELS_FILE = os.path.join(DATASET_DIR, "labels.csv")
@@ -68,6 +69,20 @@ try:
 except Exception as e:
     print(f"Ошибка: {e}")
     exit(1)
+
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "ok",
+        "device": DEVICE,
+        "cuda_available": torch.cuda.is_available(),
+        "model_loaded": processor is not None and model is not None,
+        "model_path_exists": os.path.isdir(LOCAL_MODEL_PATH),
+        "dataset_dir_exists": os.path.isdir(DATASET_DIR),
+        "labels_file_exists": os.path.isfile(LABELS_FILE),
+        "batch_size": BATCH_SIZE,
+        "resize_max_dim": RESIZE_MAX_DIM,
+    }
 
 def group_boxes_into_lines_and_merge(boxes):
     if not boxes: return []

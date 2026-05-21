@@ -7,11 +7,12 @@
 **/.dart_tool/
 **/build/
 **/.flutter-plugins-dependencies
+**/android/local.properties
 **/ios/Flutter/ephemeral/
 **/macos/Flutter/ephemeral/
 **/windows/flutter/ephemeral/
 **/linux/flutter/ephemeral/
 
 # Local data/models if needed
-myscribe_backend/dataset/images/
+myscribe_backend/dataset/
 myscribe_backend/trocr-handwritten-cyrillic/

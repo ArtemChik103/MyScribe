@@ -8,7 +8,7 @@ plugins {
 android {
     namespace = "com.example.myscribe_app"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = "29.0.14206865"
+    ndkVersion = "30.0.14904198"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

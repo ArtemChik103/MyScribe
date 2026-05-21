@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import 'package:myscribe_app/models/document.dart';
 import 'package:myscribe_app/services/database_service.dart';
 import 'package:myscribe_app/services/ocr_service.dart';
+import 'package:myscribe_app/ui/screens/api_settings_screen.dart';
 import 'package:myscribe_app/ui/screens/document_detail_screen.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -20,6 +21,8 @@ enum HomeOcrState { idle, uploading, detecting, recognizing, done, error }
 enum HomeDateFilter { allTime, last7Days, last30Days }
 
 enum HomeReviewFilter { all, requiresReview, reviewed }
+
+enum HomeBackendState { unknown, checking, online, offline }
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -44,6 +47,9 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _ocrMessage;
   String? _ocrError;
   String? _retryImagePath;
+  HomeBackendState _backendState = HomeBackendState.unknown;
+  BackendHealth? _backendHealth;
+  String? _backendError;
 
   HomeDateFilter _dateFilter = HomeDateFilter.allTime;
   HomeReviewFilter _reviewFilter = HomeReviewFilter.all;
@@ -102,6 +108,8 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) return;
     await _loadDocuments();
     if (!mounted) return;
+    await _checkBackendHealth(showErrors: false);
+    if (!mounted) return;
 
     if (deletedCount > 0) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -158,6 +166,47 @@ class _HomeScreenState extends State<HomeScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Удалено поврежденных документов: $deletedCount')),
     );
+  }
+
+  Future<void> _checkBackendHealth({bool showErrors = true}) async {
+    if (_backendState == HomeBackendState.checking) {
+      return;
+    }
+
+    final ocrService = Provider.of<OcrService>(context, listen: false);
+    setState(() {
+      _backendState = HomeBackendState.checking;
+      _backendError = null;
+    });
+
+    try {
+      final health = await ocrService.checkHealth();
+      if (!mounted) return;
+      setState(() {
+        _backendHealth = health;
+        _backendState = HomeBackendState.online;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _backendHealth = null;
+        _backendError = _toUserError(e);
+        _backendState = HomeBackendState.offline;
+      });
+      if (showErrors) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Сервер недоступен: $_backendError')),
+        );
+      }
+    }
+  }
+
+  Future<void> _openApiSettings() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (context) => const ApiSettingsScreen()),
+    );
+    if (!mounted) return;
+    await _checkBackendHealth(showErrors: false);
   }
 
   Future<void> _pickImage(ImageSource source) async {
@@ -475,6 +524,46 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (_) {}
   }
 
+  Widget _buildBackendStatusButton() {
+    final (icon, color, tooltip) = switch (_backendState) {
+      HomeBackendState.online => (
+        Icons.cloud_done_outlined,
+        Colors.greenAccent,
+        'Сервер доступен: ${_backendHealth?.device ?? 'unknown'}',
+      ),
+      HomeBackendState.offline => (
+        Icons.cloud_off_outlined,
+        Colors.redAccent,
+        'Сервер недоступен',
+      ),
+      HomeBackendState.checking => (
+        Icons.sync,
+        Colors.orangeAccent,
+        'Проверка сервера',
+      ),
+      HomeBackendState.unknown => (
+        Icons.cloud_queue_outlined,
+        Colors.blueGrey,
+        'Статус сервера',
+      ),
+    };
+
+    return IconButton(
+      icon: _backendState == HomeBackendState.checking
+          ? SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: color,
+              ),
+            )
+          : Icon(icon, color: color),
+      tooltip: tooltip,
+      onPressed: _openApiSettings,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final selectedCount = _selectedDocumentIds.length;
@@ -508,6 +597,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ]
             : [
+                _buildBackendStatusButton(),
                 IconButton(
                   icon: const Icon(Icons.cleaning_services_outlined),
                   tooltip: 'Очистить поврежденные',
