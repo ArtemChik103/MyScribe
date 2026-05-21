@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
 import 'package:myscribe_app/models/correction.dart';
 import 'package:myscribe_app/models/document.dart';
+import 'package:myscribe_app/services/api_settings_service.dart';
 import 'package:myscribe_app/services/database_service.dart';
 import 'package:myscribe_app/services/ocr_service.dart';
 import 'package:myscribe_app/ui/widgets/selection_painter.dart';
@@ -290,10 +291,7 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
     setState(() {
       _isSavingCorrection = true;
     });
-    _setSyncStatus(
-      CorrectionSyncState.savingLocal,
-      'Сохраняем локально...',
-    );
+    _setSyncStatus(CorrectionSyncState.savingLocal, 'Сохраняем локально...');
 
     try {
       final sourceFile = File(widget.document.imagePath);
@@ -420,9 +418,9 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
         correctedText: pending.correctedText,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Повторная отправка успешна')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Повторная отправка успешна')),
+      );
     } catch (e) {
       if (!mounted) return;
       _setSyncStatus(
@@ -454,6 +452,8 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
 
     final ocrService = Provider.of<OcrService>(context, listen: false);
     final dbService = Provider.of<DatabaseService>(context, listen: false);
+    final apiSettings = Provider.of<ApiSettingsService>(context, listen: false);
+    final selectedEngine = apiSettings.ocrEngine;
 
     try {
       setState(() {
@@ -472,7 +472,12 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
 
       _textController.text = recognizedText;
       widget.document.recognizedText = recognizedText;
+      widget.document.ocrEngine = selectedEngine.name;
       await dbService.updateDocumentText(widget.document.id, recognizedText);
+      await dbService.updateDocumentOcrEngine(
+        widget.document.id,
+        selectedEngine.name,
+      );
 
       _setSyncStatus(CorrectionSyncState.sent, 'Текст обновлен');
       if (widget.document.requiresReview) {
@@ -650,7 +655,10 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
           Expanded(child: Text(message)),
           if (_syncState == CorrectionSyncState.sendFailed &&
               _pendingCorrectionUpload != null)
-            TextButton(onPressed: _retryPendingUpload, child: const Text('Retry')),
+            TextButton(
+              onPressed: _retryPendingUpload,
+              child: const Text('Retry'),
+            ),
         ],
       ),
     );
@@ -682,6 +690,10 @@ class _DocumentDetailScreenState extends State<DocumentDetailScreen> {
             label: const Text('Требует проверки'),
             selected: widget.document.requiresReview,
             onSelected: (value) => _setRequiresReview(value),
+          ),
+          Chip(
+            avatar: const Icon(Icons.memory, size: 18),
+            label: Text(OcrEngine.fromName(widget.document.ocrEngine).label),
           ),
         ],
       ),

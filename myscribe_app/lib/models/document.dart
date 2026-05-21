@@ -3,6 +3,7 @@ class Document {
   final String imagePath;
   String recognizedText;
   final DateTime createdAt;
+  String ocrEngine;
   bool requiresReview;
 
   Document({
@@ -10,6 +11,7 @@ class Document {
     required this.imagePath,
     required this.recognizedText,
     required this.createdAt,
+    this.ocrEngine = 'trocr',
     this.requiresReview = false,
   });
 
@@ -25,6 +27,7 @@ class Document {
       imagePath: map['imagePath'],
       recognizedText: map['recognizedText'],
       createdAt: DateTime.parse(map['createdAt']),
+      ocrEngine: map['ocrEngine']?.toString() ?? 'trocr',
       requiresReview: requiresReview,
     );
   }
@@ -36,6 +39,7 @@ class Document {
       'imagePath': imagePath,
       'recognizedText': recognizedText,
       'createdAt': createdAt.toIso8601String(),
+      'ocrEngine': ocrEngine,
       'requiresReview': requiresReview ? 1 : 0,
     };
   }

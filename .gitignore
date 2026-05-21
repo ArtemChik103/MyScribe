@@ -16,3 +16,5 @@
 # Local data/models if needed
 myscribe_backend/dataset/
 myscribe_backend/trocr-handwritten-cyrillic/
+myscribe_backend/.paddleocr/
+myscribe_backend/paddleocr/

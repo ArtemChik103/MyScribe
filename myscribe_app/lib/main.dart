@@ -13,15 +13,17 @@ void main() async {
   final apiSettingsService = await ApiSettingsService.create();
   final dbService = DatabaseService.instance;
   final ocrService = OcrService(apiSettings: apiSettingsService);
-  
+
   // Загрузка модели здесь больше не нужна, так как она на сервере Python.
   // Проверка орфографии отключена, чтобы не вызывать ошибок с assets.
 
-  runApp(MyApp(
-    apiSettingsService: apiSettingsService,
-    databaseService: dbService,
-    ocrService: ocrService,
-  ));
+  runApp(
+    MyApp(
+      apiSettingsService: apiSettingsService,
+      databaseService: dbService,
+      ocrService: ocrService,
+    ),
+  );
 }
 
 class MyApp extends StatelessWidget {

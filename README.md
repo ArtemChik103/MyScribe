@@ -2,8 +2,8 @@
 
 MyScribe - приложение для распознавания рукописного русского текста с телефона.
 Проект состоит из Flutter-клиента и Python FastAPI backend. Телефон отправляет
-фото на backend, backend находит строки через EasyOCR и распознает их моделью
-TrOCR, после чего приложение сохраняет документ локально.
+фото на backend, backend распознает текст выбранным OCR-движком, после чего
+приложение сохраняет документ локально.
 
 ## Что внутри
 
@@ -13,6 +13,18 @@ TrOCR, после чего приложение сохраняет докуме�
 - `myscribe_backend/dataset` - локальные исправления пользователя и фрагменты
   изображений для сбора данных. Дообучение в текущем проекте не запускается.
 
+## OCR-режимы
+
+В приложении на экране `API и сервер` можно выбрать один из двух режимов:
+
+- `TrOCR` - основной режим по умолчанию. EasyOCR ищет строки, TrOCR распознает
+  crop-строки. Обычно лучше подходит для рукописного текста, но тяжелее.
+- `PaddleOCR` - optional альтернативный локальный режим. Он подключается только
+  при выборе `engine=paddle` и рассчитан на CPU-first установку.
+
+PaddleOCR не является обязательной зависимостью. Обычный backend с TrOCR должен
+стартовать и работать без установленного PaddleOCR.
+
 ## Backend
 
 Установить зависимости:
@@ -20,6 +32,14 @@ TrOCR, после чего приложение сохраняет докуме�
 ```powershell
 cd C:\Users\pvppv\Desktop\roo\MyScribe\myscribe_backend
 python -m pip install -r requirements.txt
+```
+
+Опционально установить PaddleOCR:
+
+```powershell
+cd C:\Users\pvppv\Desktop\roo\MyScribe\myscribe_backend
+python -m pip install -r requirements-paddle.txt
+python .\tools\warmup_paddle.py
 ```
 
 Запустить backend для телефона по USB через `adb reverse`:
@@ -43,7 +63,16 @@ curl http://127.0.0.1:8000/health
 ```
 
 Ожидаемый ответ содержит `status`, `device`, `cuda_available`,
-`model_loaded`, состояние папки модели и dataset.
+`model_loaded`, состояние папки модели и dataset. Новый ответ также содержит
+`default_engine` и `engines.trocr` / `engines.paddle`.
+
+Пример OCR-запроса с PaddleOCR:
+
+```powershell
+curl -X POST -F "engine=paddle" -F "file=@sample.jpg" http://127.0.0.1:8000/ocr
+```
+
+Без поля `engine` backend использует `trocr`.
 
 ## Flutter-приложение
 
@@ -115,10 +144,20 @@ flutter build apk --debug
 В приложении откройте `API и сервер`, нажмите `Проверить сервер` и убедитесь,
 что сервер доступен, модель загружена, а `Device` показывает `cuda` или `cpu`.
 
+## Как сравнивать TrOCR и PaddleOCR
+
+1. Выберите один и тот же снимок.
+2. На экране `API и сервер` выберите `TrOCR` и распознайте документ.
+3. Переключите engine на `PaddleOCR` и распознайте тот же снимок повторно.
+4. Сравните скорость, количество строк и качество текста в созданных
+   документах. В списке и деталях документа сохраняется chip с engine.
+
 ## Важные заметки
 
 - Модель не хранится в git и должна лежать в
   `myscribe_backend/trocr-handwritten-cyrillic`.
+- PaddleOCR CPU-first нужен для стабильности установки; GPU-ускорение PaddleOCR
+  не входит в этот этап.
 - Dataset и пользовательские изображения не нужно коммитить.
 - Окно backend должно оставаться открытым, пока приложение распознает текст.
 - Если сборка Android снова ругается на NDK, проверьте установленную версию NDK

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:myscribe_app/models/document.dart';
+import 'package:myscribe_app/services/api_settings_service.dart';
 import 'package:myscribe_app/services/database_service.dart';
 import 'package:myscribe_app/services/ocr_service.dart';
 import 'package:myscribe_app/ui/screens/api_settings_screen.dart';
@@ -202,9 +203,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _openApiSettings() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (context) => const ApiSettingsScreen()),
-    );
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (context) => const ApiSettingsScreen()));
     if (!mounted) return;
     await _checkBackendHealth(showErrors: false);
   }
@@ -221,7 +222,9 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!permissionStatus.isGranted) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Нет разрешения на доступ к изображению.')),
+        const SnackBar(
+          content: Text('Нет разрешения на доступ к изображению.'),
+        ),
       );
       return;
     }
@@ -257,12 +260,15 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _runOcrForPersistentImage(String imagePath) async {
     final ocrService = Provider.of<OcrService>(context, listen: false);
     final dbService = Provider.of<DatabaseService>(context, listen: false);
+    final apiSettings = Provider.of<ApiSettingsService>(context, listen: false);
+    final selectedEngine = apiSettings.ocrEngine;
+    final engineLabel = selectedEngine.label;
 
     try {
       final imageBytes = await File(imagePath).readAsBytes();
       _setOcrState(
         HomeOcrState.detecting,
-        message: 'Detecting: анализ изображения...',
+        message: 'Detecting через $engineLabel: анализ изображения...',
         retryImagePath: imagePath,
       );
 
@@ -274,7 +280,7 @@ class _HomeScreenState extends State<HomeScreen> {
             case OcrProcessingStage.sending:
               _setOcrState(
                 HomeOcrState.detecting,
-                message: 'Detecting: отправка на сервер...',
+                message: 'Detecting через $engineLabel: отправка на сервер...',
                 retryImagePath: imagePath,
               );
               break;
@@ -282,7 +288,7 @@ class _HomeScreenState extends State<HomeScreen> {
             case OcrProcessingStage.parsing:
               _setOcrState(
                 HomeOcrState.recognizing,
-                message: 'Recognizing: получение текста...',
+                message: 'Recognizing через $engineLabel: получение текста...',
                 retryImagePath: imagePath,
               );
               break;
@@ -295,6 +301,7 @@ class _HomeScreenState extends State<HomeScreen> {
         imagePath: imagePath,
         recognizedText: recognizedText,
         createdAt: DateTime.now(),
+        ocrEngine: selectedEngine.name,
         requiresReview: recognizedText.trim().isEmpty,
       );
 
@@ -427,9 +434,9 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       });
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Удалено документов: ${idsToDelete.length}')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Удалено документов: ${idsToDelete.length}')),
+      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -451,9 +458,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (sourceDocs.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Нет документов для экспорта.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Нет документов для экспорта.')),
+      );
       return;
     }
 
@@ -470,6 +477,7 @@ class _HomeScreenState extends State<HomeScreen> {
             'imagePath': doc.imagePath,
             'recognizedText': doc.recognizedText,
             'createdAt': doc.createdAt.toIso8601String(),
+            'ocrEngine': doc.ocrEngine,
             'requiresReview': doc.requiresReview,
           },
         )
@@ -515,6 +523,10 @@ class _HomeScreenState extends State<HomeScreen> {
         : message;
   }
 
+  String _engineLabel(String engine) {
+    return OcrEngine.fromName(engine).label;
+  }
+
   Future<void> _deleteFileIfExists(String path) async {
     try {
       final file = File(path);
@@ -553,10 +565,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ? SizedBox(
               width: 22,
               height: 22,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: color,
-              ),
+              child: CircularProgressIndicator(strokeWidth: 2, color: color),
             )
           : Icon(icon, color: color),
       tooltip: tooltip,
@@ -571,9 +580,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          _isSelectionMode
-              ? 'Выбрано: $selectedCount'
-              : 'MyScribe Документы',
+          _isSelectionMode ? 'Выбрано: $selectedCount' : 'MyScribe Документы',
         ),
         actions: _isSelectionMode
             ? [
@@ -585,8 +592,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 IconButton(
                   icon: const Icon(Icons.delete_outline),
                   tooltip: 'Удалить выбранное',
-                  onPressed:
-                      selectedCount == 0 ? null : _deleteSelectedDocuments,
+                  onPressed: selectedCount == 0
+                      ? null
+                      : _deleteSelectedDocuments,
                 ),
                 IconButton(
                   icon: const Icon(Icons.share),
@@ -710,7 +718,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           children: [
                             Expanded(
                               child: Text(
-                                firstLine.isNotEmpty ? firstLine : 'Пустой текст',
+                                firstLine.isNotEmpty
+                                    ? firstLine
+                                    : 'Пустой текст',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
@@ -723,6 +733,13 @@ class _HomeScreenState extends State<HomeScreen> {
                                   visualDensity: VisualDensity.compact,
                                 ),
                               ),
+                            Padding(
+                              padding: const EdgeInsets.only(left: 8),
+                              child: Chip(
+                                label: Text(_engineLabel(doc.ocrEngine)),
+                                visualDensity: VisualDensity.compact,
+                              ),
+                            ),
                           ],
                         ),
                         subtitle: Text(
@@ -748,12 +765,15 @@ class _HomeScreenState extends State<HomeScreen> {
                             ? const SizedBox(
                                 width: 24,
                                 height: 24,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               )
                             : _isSelectionMode
                             ? Checkbox(
                                 value: isSelected,
-                                onChanged: (_) => _toggleDocumentSelection(doc.id),
+                                onChanged: (_) =>
+                                    _toggleDocumentSelection(doc.id),
                               )
                             : IconButton(
                                 icon: const Icon(
@@ -909,12 +929,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final text = hasAnyDocs
         ? 'Нет документов по текущим фильтрам.'
         : 'Нет документов.\nДобавьте новый через кнопку ниже.';
-    return Center(
-      child: Text(
-        text,
-        textAlign: TextAlign.center,
-      ),
-    );
+    return Center(child: Text(text, textAlign: TextAlign.center));
   }
 
   Future<String> _persistPickedImage(XFile image) async {

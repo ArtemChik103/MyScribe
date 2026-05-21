@@ -11,10 +11,14 @@ class SpellCheckService {
   Future<void> loadDictionaries() async {
     try {
       final ruContent = await _loadAndCleanAsset(AppConstants.ruDictionaryPath);
-      _russianWords.addAll(ruContent.split('\n').map((e) => e.trim().toLowerCase()));
+      _russianWords.addAll(
+        ruContent.split('\n').map((e) => e.trim().toLowerCase()),
+      );
 
       final enContent = await _loadAndCleanAsset(AppConstants.enDictionaryPath);
-      _englishWords.addAll(enContent.split('\n').map((e) => e.trim().toLowerCase()));
+      _englishWords.addAll(
+        enContent.split('\n').map((e) => e.trim().toLowerCase()),
+      );
 
       debugPrint(
         'Словари загружены: ${_russianWords.length} русских, '
@@ -44,7 +48,8 @@ class SpellCheckService {
 
     for (final word in words) {
       final lowerWord = word.toLowerCase();
-      if (!_russianWords.contains(lowerWord) && !_englishWords.contains(lowerWord)) {
+      if (!_russianWords.contains(lowerWord) &&
+          !_englishWords.contains(lowerWord)) {
         misspelledWords.add(word);
       }
     }

@@ -32,6 +32,7 @@ class DatabaseService {
         imagePath TEXT NOT NULL,
         recognizedText TEXT NOT NULL,
         createdAt TEXT NOT NULL,
+        ocrEngine TEXT NOT NULL DEFAULT 'trocr',
         requiresReview INTEGER NOT NULL DEFAULT 0
       )
     '''); // <-- ИСПОЛЬЗОВАНИЕ
@@ -51,6 +52,12 @@ class DatabaseService {
       await db.execute(
         'ALTER TABLE ${AppConstants.tableDocuments} '
         'ADD COLUMN requiresReview INTEGER NOT NULL DEFAULT 0',
+      );
+    }
+    if (oldVersion < 3) {
+      await db.execute(
+        'ALTER TABLE ${AppConstants.tableDocuments} '
+        "ADD COLUMN ocrEngine TEXT NOT NULL DEFAULT 'trocr'",
       );
     }
   }
@@ -84,11 +91,24 @@ class DatabaseService {
     );
   }
 
-  Future<void> updateDocumentRequiresReview(String id, bool requiresReview) async {
+  Future<void> updateDocumentRequiresReview(
+    String id,
+    bool requiresReview,
+  ) async {
     final db = await database;
     await db.update(
       AppConstants.tableDocuments,
       {'requiresReview': requiresReview ? 1 : 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<void> updateDocumentOcrEngine(String id, String ocrEngine) async {
+    final db = await database;
+    await db.update(
+      AppConstants.tableDocuments,
+      {'ocrEngine': ocrEngine},
       where: 'id = ?',
       whereArgs: [id],
     );

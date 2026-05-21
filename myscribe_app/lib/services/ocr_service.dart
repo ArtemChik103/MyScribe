@@ -5,8 +5,55 @@ import 'package:myscribe_app/services/api_settings_service.dart';
 
 enum OcrProcessingStage { sending, processing, parsing }
 
+class OcrRequestException implements Exception {
+  final String message;
+
+  const OcrRequestException(this.message);
+
+  @override
+  String toString() => message;
+}
+
+class BackendEngineHealth {
+  final bool available;
+  final bool loaded;
+  final String device;
+  final bool? modelPathExists;
+  final String? lang;
+
+  const BackendEngineHealth({
+    required this.available,
+    required this.loaded,
+    required this.device,
+    this.modelPathExists,
+    this.lang,
+  });
+
+  factory BackendEngineHealth.fromJson(Map<String, dynamic>? json) {
+    if (json == null) {
+      return const BackendEngineHealth(
+        available: false,
+        loaded: false,
+        device: 'unknown',
+      );
+    }
+
+    return BackendEngineHealth(
+      available: json['available'] == true,
+      loaded: json['loaded'] == true,
+      device: json['device']?.toString() ?? 'unknown',
+      modelPathExists: json['model_path_exists'] is bool
+          ? json['model_path_exists'] as bool
+          : null,
+      lang: json['lang']?.toString(),
+    );
+  }
+}
+
 class BackendHealth {
   final String status;
+  final String defaultEngine;
+  final Map<String, BackendEngineHealth> engines;
   final String device;
   final bool cudaAvailable;
   final bool modelLoaded;
@@ -18,6 +65,8 @@ class BackendHealth {
 
   const BackendHealth({
     required this.status,
+    required this.defaultEngine,
+    required this.engines,
     required this.device,
     required this.cudaAvailable,
     required this.modelLoaded,
@@ -29,8 +78,21 @@ class BackendHealth {
   });
 
   factory BackendHealth.fromJson(Map<String, dynamic> json) {
+    final rawEngines = json['engines'];
+    final engines = <String, BackendEngineHealth>{};
+    if (rawEngines is Map<String, dynamic>) {
+      for (final entry in rawEngines.entries) {
+        final value = entry.value;
+        engines[entry.key] = BackendEngineHealth.fromJson(
+          value is Map<String, dynamic> ? value : null,
+        );
+      }
+    }
+
     return BackendHealth(
       status: json['status']?.toString() ?? 'unknown',
+      defaultEngine: json['default_engine']?.toString() ?? 'trocr',
+      engines: engines,
       device: json['device']?.toString() ?? 'unknown',
       cudaAvailable: json['cuda_available'] == true,
       modelLoaded: json['model_loaded'] == true,
@@ -47,7 +109,7 @@ class BackendHealth {
 
 class OcrService {
   OcrService({required ApiSettingsService apiSettings})
-      : _apiSettings = apiSettings;
+    : _apiSettings = apiSettings;
 
   final ApiSettingsService _apiSettings;
 
@@ -61,6 +123,7 @@ class OcrService {
 
       // Создаем Multipart запрос
       final request = http.MultipartRequest('POST', uri);
+      request.fields['engine'] = _apiSettings.ocrEngine.name;
 
       // Добавляем файл
       request.files.add(
@@ -83,15 +146,24 @@ class OcrService {
           utf8.decode(response.bodyBytes),
         );
         final String text = data['text'] ?? "";
-        debugPrint('OCR success, text length: ${text.length}');
+        debugPrint(
+          'OCR success (${data['engine'] ?? _apiSettings.ocrEngine.name}), '
+          'text length: ${text.length}',
+        );
         return text;
       }
 
       final responseBody = utf8.decode(response.bodyBytes);
       debugPrint('OCR error ${response.statusCode}: $responseBody');
-      throw Exception(
-        'Сервер вернул ${response.statusCode}. '
-        'Проверьте доступность OCR API.',
+      var detail = 'Проверьте доступность OCR API.';
+      try {
+        final decoded = jsonDecode(responseBody);
+        if (decoded is Map<String, dynamic> && decoded['detail'] != null) {
+          detail = decoded['detail'].toString();
+        }
+      } catch (_) {}
+      throw OcrRequestException(
+        'Сервер вернул ${response.statusCode}. $detail',
       );
     } on http.ClientException catch (e) {
       debugPrint('OCR client exception: $e');
@@ -99,6 +171,8 @@ class OcrService {
         'Ошибка соединения с сервером (${_apiSettings.effectiveBaseUrl}). '
         'Проверьте адрес API в настройках приложения.',
       );
+    } on OcrRequestException catch (e) {
+      throw Exception(e.message);
     } catch (e) {
       debugPrint('OCR unexpected error: $e');
       throw Exception(

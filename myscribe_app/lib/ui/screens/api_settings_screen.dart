@@ -131,15 +131,41 @@ class _ApiSettingsScreenState extends State<ApiSettingsScreen> {
             ],
           ),
           const SizedBox(height: 16),
-          _InfoRow(
-            label: 'Активный URL',
-            value: settings.effectiveBaseUrl,
-          ),
+          _InfoRow(label: 'Активный URL', value: settings.effectiveBaseUrl),
           _InfoRow(
             label: 'Источник',
             value: settings.hasCustomBaseUrl
                 ? 'Сохраненная настройка'
                 : 'Дефолт платформы или dart-define',
+          ),
+          const SizedBox(height: 16),
+          Text('OCR engine', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          SegmentedButton<OcrEngine>(
+            segments: const [
+              ButtonSegment(
+                value: OcrEngine.trocr,
+                label: Text('TrOCR'),
+                icon: Icon(Icons.edit_note),
+              ),
+              ButtonSegment(
+                value: OcrEngine.paddle,
+                label: Text('PaddleOCR'),
+                icon: Icon(Icons.speed),
+              ),
+            ],
+            selected: {settings.ocrEngine},
+            onSelectionChanged: (selection) async {
+              await settings.setOcrEngine(selection.first);
+              if (!context.mounted) return;
+              setState(() {});
+            },
+          ),
+          const SizedBox(height: 8),
+          _InfoRow(label: 'TrOCR', value: 'точнее для рукописного, тяжелее'),
+          _InfoRow(
+            label: 'PaddleOCR',
+            value: 'альтернативный быстрый локальный режим, CPU-first',
           ),
           const SizedBox(height: 16),
           FilledButton.icon(
@@ -210,6 +236,7 @@ class _ApiSettingsScreenState extends State<ApiSettingsScreen> {
             ),
             const SizedBox(height: 12),
             _InfoRow(label: 'Device', value: health.device),
+            _InfoRow(label: 'Default OCR', value: health.defaultEngine),
             _InfoRow(label: 'CUDA', value: health.cudaAvailable ? 'да' : 'нет'),
             _InfoRow(
               label: 'Модель',
@@ -227,10 +254,35 @@ class _ApiSettingsScreenState extends State<ApiSettingsScreen> {
             ),
             _InfoRow(label: 'Batch size', value: '${health.batchSize}'),
             _InfoRow(label: 'Resize', value: '${health.resizeMaxDim}px'),
+            const Divider(height: 20),
+            _EngineRow(title: 'TrOCR', health: health.engines['trocr']),
+            _EngineRow(title: 'PaddleOCR', health: health.engines['paddle']),
           ],
         ),
       ),
     );
+  }
+}
+
+class _EngineRow extends StatelessWidget {
+  final String title;
+  final BackendEngineHealth? health;
+
+  const _EngineRow({required this.title, required this.health});
+
+  @override
+  Widget build(BuildContext context) {
+    final engineHealth = health;
+    final value = engineHealth == null
+        ? 'нет данных'
+        : [
+            engineHealth.available ? 'установлен' : 'не установлен',
+            engineHealth.loaded ? 'загружен' : 'не загружен',
+            engineHealth.device,
+            if (engineHealth.lang != null) 'lang=${engineHealth.lang}',
+          ].join(' · ');
+
+    return _InfoRow(label: title, value: value);
   }
 }
 
@@ -249,10 +301,7 @@ class _InfoRow extends StatelessWidget {
         children: [
           SizedBox(
             width: 120,
-            child: Text(
-              label,
-              style: TextStyle(color: Colors.grey[400]),
-            ),
+            child: Text(label, style: TextStyle(color: Colors.grey[400])),
           ),
           Expanded(child: Text(value)),
         ],

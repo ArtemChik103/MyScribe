@@ -3,7 +3,7 @@
 class AppConstants {
   // --- Database Constants ---
   static const String databaseName = "MyScribe.db";
-  static const int databaseVersion = 2;
+  static const int databaseVersion = 3;
   static const String tableDocuments = 'documents';
   static const String tableCorrections = 'corrections';
 
