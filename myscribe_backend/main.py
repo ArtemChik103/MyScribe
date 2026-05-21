@@ -57,19 +57,33 @@ if not os.path.exists(LABELS_FILE):
         writer.writerow(["filename", "text"])
 
 # НАСТРОЙКИ СКОРОСТИ
-# 4 - нормально для GTX 1650 (FP32) при Greedy Search
-BATCH_SIZE = 4
+# Дефолты выбираем в пользу стабильности на 4GB GPU: EasyOCR остается на CPU,
+# а TrOCR использует CUDA только для распознавания crop-строк.
+BATCH_SIZE = int(os.getenv("MYSCRIBE_TROCR_BATCH_SIZE", "1"))
+NUM_BEAMS = int(os.getenv("MYSCRIBE_TROCR_NUM_BEAMS", "1"))
 RESIZE_MAX_DIM = 1280
 PADDING = 10
 DEFAULT_ENGINE = "trocr"
 SUPPORTED_ENGINES = {"trocr", "paddle"}
 
-CUDA_AVAILABLE = torch.cuda.is_available() and torch.cuda.device_count() > 0
+FORCE_CPU = os.getenv("MYSCRIBE_FORCE_CPU", "").lower() in {"1", "true", "yes"}
+CUDA_AVAILABLE = (
+    not FORCE_CPU
+    and torch.cuda.is_available()
+    and torch.cuda.device_count() > 0
+)
 DEVICE = "cuda" if CUDA_AVAILABLE else "cpu"
+EASYOCR_GPU = os.getenv("MYSCRIBE_EASYOCR_GPU", "").lower() in {"1", "true", "yes"}
 logger.info("=== УСТРОЙСТВО: %s (PyTorch Native Speed) ===", DEVICE)
+logger.info(
+    "=== OCR settings: batch_size=%s, num_beams=%s, easyocr_gpu=%s ===",
+    BATCH_SIZE,
+    NUM_BEAMS,
+    EASYOCR_GPU and CUDA_AVAILABLE,
+)
 
 logger.info("1. Настройка EasyOCR...")
-detect_reader = easyocr.Reader(["ru"], gpu=CUDA_AVAILABLE, quantize=False)
+detect_reader = easyocr.Reader(["ru"], gpu=(EASYOCR_GPU and CUDA_AVAILABLE), quantize=False)
 
 logger.info("2. Загрузка TrOCR (PyTorch)...")
 try:
@@ -190,6 +204,7 @@ async def health_check():
         "dataset_dir_exists": os.path.isdir(DATASET_DIR),
         "labels_file_exists": os.path.isfile(LABELS_FILE),
         "batch_size": BATCH_SIZE,
+        "num_beams": NUM_BEAMS,
         "resize_max_dim": RESIZE_MAX_DIM,
     }
 
@@ -241,7 +256,7 @@ def process_batch(images):
             generated_ids = model.generate(
                 pixel_values,
                 max_new_tokens=100,
-                num_beams=4,
+                num_beams=NUM_BEAMS,
                 do_sample=False,
                 early_stopping=False,
                 length_penalty=1.0,
